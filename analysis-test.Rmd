@@ -1,0 +1,113 @@
+---
+title: "Untitled"
+author: "Joseph Ciesielski"
+date: "8/16/2019"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE)
+
+library(tidyverse)
+library(readxl)
+library(here)
+library(janitor)
+library(broom)
+
+theme_set(theme_minimal())
+
+
+# gives date as year 1902; assume this is a data quality issue
+# only 6 unique dates so I will treat this as six months worht of data
+
+sales <- read_excel(here::here("Data Extract for Analysis - External Candidates v2.xlsx")) %>% 
+  janitor::clean_names() %>% 
+  mutate(sale_month = as.integer(str_sub(sale_month, 6, 7)))
+
+```
+
+First look at revenue by month.
+
+```{r}
+
+sales %>% 
+  group_by(sale_month, product) %>% 
+  summarise(total_revenue = sum(total_revenue)) %>% 
+  ggplot(aes(sale_month, total_revenue)) +
+    geom_line() +
+    facet_wrap(~product, scales = "free_y")
+
+sales %>% 
+  group_by(sale_month, sales_channel) %>% 
+  summarise(total_revenue = sum(total_revenue)) %>% 
+  ggplot(aes(sale_month, total_revenue, color = sales_channel)) +
+    geom_line()
+    
+
+sales %>% 
+  group_by(sale_month, division) %>% 
+  summarise(total_revenue = sum(total_revenue)) %>% 
+  ggplot(aes(sale_month, total_revenue, color = division)) +
+    geom_line()
+
+sales %>% 
+  group_by(sale_month, division, sales_channel) %>% 
+  summarise(total_revenue = sum(total_revenue)) %>% 
+  ggplot(aes(sale_month, total_revenue, color = sales_channel)) +
+    geom_line() +
+    facet_wrap(~ division)
+
+```
+
+```{r}
+
+sales_tidy <- sales %>% 
+  group_by(sale_month, product, division, sales_channel) %>% 
+  summarise_all(sum) %>% 
+  ungroup() %>% 
+  complete(
+    sale_month, product, division, sales_channel,
+    fill = list(number_of_units_offered = 0, number_of_units_sold = 0,
+                total_revenue = 0)
+  ) %>% 
+  mutate(
+    success_rate = number_of_units_sold / number_of_units_offered,
+    average_sale = total_revenue / number_of_units_sold,
+    dollar_per_offer = total_revenue / number_of_units_offered
+  )
+
+```
+
+```{r}
+
+sales_tidy %>% 
+  ggplot(aes(dollar_per_offer)) +
+    geom_histogram(binwidth = 0.03) +
+    geom_vline(xintercept = median(sales_tidy$dollar_per_offer, na.rm = TRUE))
+
+median(sales_tidy$dollar_per_offer, na.rm = TRUE)
+```
+
+Associate a cost offering the product to determine net revenue.
+
+Do Relationship between channel and product over time? 
+
+```{r}
+
+sales_comp <- sales_tidy %>% 
+  filter(complete.cases(sales_tidy))
+
+dpo_mod <- lm(log(dollar_per_offer + 0.001) ~ factor(product) + division + sales_channel + factor(sale_month),
+   data = sales_comp)
+
+tidy(dpo_mod) %>% 
+  filter(term != "(Intercept)") %>% 
+  mutate(term = fct_reorder(term, estimate)) %>% 
+  ggplot(aes(term, estimate, ymin = estimate - 2 * std.error, ymax = estimate + 2 * std.error )) +
+    geom_point() +
+    geom_linerange() +
+    coord_flip()
+  
+```
+
