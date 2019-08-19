@@ -24,7 +24,7 @@ SELECT
 
 FROM FINANCE.REVENUE
 
-WHERE r.ACCT_NUM = 9994523
+WHERE r.ACCT_NUM = 9994523 and r.MONTH = "Feb"
 
 -- question 3
 
@@ -79,6 +79,8 @@ SELECT
 	count(distinct ACCT_NUM) as UNIQUE_VIEWERS
 
 FROM FINANCE.WIFI-LOGIN
+
+GROUP BY wl.MONTH, wl.LOCATION
 
 -- question 6
 

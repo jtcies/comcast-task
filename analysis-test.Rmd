@@ -1,22 +1,27 @@
 ---
-title: "Untitled"
+title: "Using 'dollar per offer' to identify opportunities for increased investment"
 author: "Joseph Ciesielski"
 date: "8/16/2019"
-output: ioslides_presentation
+output: 
+    ioslides_presentation:
+        smaller: true
+        css: style.css
 ---
 
 ```{r setup, include=FALSE}
 
-knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      fig.width = 7, fig.asp = 0.618, fig.align = "center")
 
 library(tidyverse)
 library(readxl)
 library(here)
 library(janitor)
 library(broom)
+library(scales)
+library(randomForest)
 
-theme_set(theme_minimal())
-
+theme_set(theme_light())
 
 # gives date as year 1902; assume this is a data quality issue
 # only 6 unique dates so I will treat this as six months worht of data
@@ -25,49 +30,14 @@ sales <- read_excel(here::here("Data Extract for Analysis - External Candidates 
   janitor::clean_names() %>% 
   mutate(sale_month = as.integer(str_sub(sale_month, 6, 7)))
 
-```
-
-First look at revenue by month.
-
-```{r}
-
-sales %>% 
-  group_by(sale_month, product) %>% 
-  summarise(total_revenue = sum(total_revenue)) %>% 
-  ggplot(aes(sale_month, total_revenue)) +
-    geom_line() +
-    facet_wrap(~product, scales = "free_y")
-
-sales %>% 
-  group_by(sale_month, sales_channel) %>% 
-  summarise(total_revenue = sum(total_revenue)) %>% 
-  ggplot(aes(sale_month, total_revenue, color = sales_channel)) +
-    geom_line()
-    
-
-sales %>% 
-  group_by(sale_month, division) %>% 
-  summarise(total_revenue = sum(total_revenue)) %>% 
-  ggplot(aes(sale_month, total_revenue, color = division)) +
-    geom_line()
-
-sales %>% 
-  group_by(sale_month, division, sales_channel) %>% 
-  summarise(total_revenue = sum(total_revenue)) %>% 
-  ggplot(aes(sale_month, total_revenue, color = sales_channel)) +
-    geom_line() +
-    facet_wrap(~ division)
-
-```
-
-```{r}
-
 sales_tidy <- sales %>% 
   group_by(sale_month, product, division, sales_channel) %>% 
   summarise_all(sum) %>% 
   ungroup() %>% 
   complete(
     sale_month, product, division, sales_channel,
+
+
     fill = list(number_of_units_offered = 0, number_of_units_sold = 0,
                 total_revenue = 0)
   ) %>% 
@@ -77,37 +47,276 @@ sales_tidy <- sales %>%
     dollar_per_offer = total_revenue / number_of_units_offered
   )
 
-```
-
-```{r}
-
-sales_tidy %>% 
-  ggplot(aes(dollar_per_offer)) +
-    geom_histogram(binwidth = 0.03) +
-    geom_vline(xintercept = median(sales_tidy$dollar_per_offer, na.rm = TRUE))
-
-median(sales_tidy$dollar_per_offer, na.rm = TRUE)
-```
-
-Associate a cost offering the product to determine net revenue.
-
-Do Relationship between channel and product over time? 
-
-```{r}
-
 sales_comp <- sales_tidy %>% 
   filter(complete.cases(sales_tidy))
-
-dpo_mod <- lm(log(dollar_per_offer + 0.001) ~ factor(product) + division + sales_channel + factor(sale_month),
-   data = sales_comp)
-
-tidy(dpo_mod) %>% 
-  filter(term != "(Intercept)") %>% 
-  mutate(term = fct_reorder(term, estimate)) %>% 
-  ggplot(aes(term, estimate, ymin = estimate - 2 * std.error, ymax = estimate + 2 * std.error )) +
-    geom_point() +
-    geom_linerange() +
-    coord_flip()
-  
 ```
+
+# Overview
+
+## What are we examining?  
+
+* `r nrow(sales_tidy %>% distinct(product))` products
+* `r nrow(sales_tidy %>% distinct(sales_channel))` sales channels
+* `r nrow(sales_tidy %>% distinct(division))` divisions
+
+* Data provided on:
+    * number of units offered
+    * number of units sold
+    * total revenue earned
+
+## Changes over time
+
+```{r salemonth}
+
+sales_tidy %>%
+    group_by(sale_month) %>%
+    summarise(total_revenue = sum(total_revenue)) %>%
+    ggplot(aes(sale_month, total_revenue)) +
+        geom_line() +
+        expand_limits(y = 0) +
+        scale_y_continuous(labels = scales::dollar_format()) +
+        labs(
+            x = "month",
+            y = "total revenue",
+            title = "Total revenue by month"
+        )
+```
+
+# How should we evaluate the success of sales? 
+
+## Success rate 
+
+* Sale rate is consistent across division, product, channel, month
+* Accross all variables, .3% of products offered are sold
+
+```{r successrate}
+
+sales_tidy %>%
+    filter(division != "OTHER",
+           dollar_per_offer != Inf) %>%
+    ggplot(aes(factor(product), success_rate)) +
+        geom_point() + 
+        facet_grid(division ~ sales_channel) +
+        expand_limits(y = c(0, 0.004)) +
+        scale_y_continuous(labels = scales::percent_format()) +
+        labs(
+            x = "Product",
+            y = "Success rate",
+            title = "Rate of successful sales"
+        )
+```
+
+## Average sale
+
+* Revenue per sale driven mostly by product
+* Consistent across month and division
+
+```{r averagesale}
+
+sales_tidy %>%
+    filter(division != "OTHER",
+           dollar_per_offer != Inf) %>%
+    ggplot(aes(factor(product), average_sale, color = factor(sale_month))) +
+        geom_jitter() + 
+        facet_grid(division ~ sales_channel) +
+        scale_y_continuous(labels = dollar_format()) +
+        labs(
+            x = "Product",
+            y = "Average sale",
+            title = "Average revenue generated per sale",
+            color = "Month"
+        )
+```
+
+## Dollar earned per offer
+
+* Closest possible to a 'return on investment' with the data available
+* Will use this for remainder of presentation
+
+```{r dpo}
+
+sales_tidy %>%
+    filter(division != "OTHER",
+           dollar_per_offer != Inf) %>%
+    ggplot(aes(factor(product), dollar_per_offer, color = factor(sale_month))) + 
+        geom_jitter() +
+        facet_grid(division ~ sales_channel) +
+        scale_y_continuous(labels = dollar_format()) +
+        labs(
+            x = "Product",
+            y = "Dollar earned per offer",
+            title = "Dollar earned per offer",
+            color = "Month"
+        )
+
+```
+
+## More about dollar per offer
+
+* In practice, will resemble average sale for this analysis because the sale success rate is so steady across all variables
+* This metric will be more flexible if / when success rate changes
+  * Incoroprates cost which average sale cannot
+* Ideally, future analyses examine individual level information to understand lifetime value of customers in realtionship to the investment required to make the sale
+* However, this assumes a consistent cost to offer across products, divisions, and channels
+    * If costs of offer vary substantially, this analysis can be adapted by adding / estimating those costs 
+* May be useful for identifying opportunities for increased investment or finding most efficient products / channels / divisions
+
+# What influences dollar per offer? 
+
+## Predicting dollar per offer
+
+* I built two statistical models with four sets of variables each
+* Product and sales channel provide most helpful information in predicting dollar per offer
+
+```{r dpomod}
+
+set.seed(2019)
+
+sales_mod <- sales_tidy %>%
+    mutate_at(vars(product, sale_month, division, sales_channel), as.factor) %>%
+    filter(dollar_per_offer != Inf,
+           division != "OTHER")
+
+split <- sample(c(TRUE, FALSE), nrow(sales_mod), replace = TRUE,
+                prob = c(0.7, 0.3))
+train <- sales_mod[split, ]
+test <- sales_mod[-split, ]
+
+
+outcome <- "dollar_per_offer"
+vars1 <- "product"
+vars2 <- c(vars1, "sales_channel")
+vars3 <- c(vars2, "division")
+vars4 <- c(vars3, "sale_month")
+
+f1 <- as.formula(paste(outcome, paste(vars1), sep = "~"))
+f2 <- as.formula(paste(outcome, paste(vars2, collapse = "+"), sep = "~"))
+f3 <- as.formula(paste(outcome, paste(vars3, collapse = "+"), sep = "~"))
+f4 <- as.formula(paste(outcome, paste(vars4, collapse = "+"), sep = "~"))
+
+lmod1 <- lm(f1, data = train)
+lmod2 <- lm(f2, data = train)
+lmod3 <- lm(f3, data = train)
+lmod4 <- lm(f4, data = train)
+
+rfmod1 <- randomForest(f1, data = train)
+rfmod2 <- randomForest(f2, data = train)
+rfmod3 <- randomForest(f3, data = train)
+rfmod4 <- randomForest(f4, data = train)
+
+rmse <- function(x) {
+
+   sqrt(mean(x ^ 2))
+}
+
+sales_pred <- test %>%
+    mutate(
+        lpred1 = predict(lmod1, .),
+        lpred2 = predict(lmod2, .),
+        lpred3 = predict(lmod3, .),
+        lpred4 = predict(lmod4, .),
+        lresid1 = lpred1 - dollar_per_offer,
+        lresid2 = lpred2 - dollar_per_offer,
+        lresid3 = lpred3 - dollar_per_offer,
+        lresid4 = lpred4 - dollar_per_offer,
+        rfpred1 = predict(rfmod1, .),
+        rfpred2 = predict(rfmod2, .),
+        rfpred3 = predict(rfmod3, .),
+        rfpred4 = predict(rfmod4, .),
+        rfresid1 = rfpred1 - dollar_per_offer,
+        rfresid2 = rfpred2 - dollar_per_offer,
+        rfresid3 = rfpred3 - dollar_per_offer,
+        rfresid4 = rfpred4 - dollar_per_offer,
+    )
+
+sales_pred %>%
+    summarise_at(vars(contains("resid")), rmse) %>%
+    gather(model, resid) %>% 
+    separate(model, c("type", "vars"), sep = "resid") %>%
+    ggplot(aes(vars, resid, color = type, group = type)) +
+        geom_line() +
+        expand_limits(y = 0) +
+        scale_color_discrete(labels = c("linear model", "random forest")) +
+        scale_x_discrete(labels = c("product", "product + channel",
+                                    "product + channel +\ndivision",
+                                    "product + channel +\ndivision + month")) +
+        labs(
+            title = "Product and sales channel provide most useful information",
+            x = "Predictors",
+            y = "RMSE", 
+            color = "Model",
+            subtitle = "Root mean squared error of each model when applied to unseen test data"
+        )
+
+```
+
+# What are the most profitable products? 
+
+## Most revenue driven by a few products
+
+* Products 3 and 4 are the highest selling, offered most
+* Channels Z and X generate the most revenue
+
+```{r div1}
+
+sales_tidy %>%
+    filter(division != "OTHER") %>%
+    mutate(product = fct_lump(factor(product), n = 7, w = total_revenue)) %>%
+    ggplot(aes(factor(product), total_revenue, fill = sales_channel)) +
+        geom_col(position = "dodge") +
+        facet_wrap(~ division, ncol = 1) +
+        scale_y_continuous(labels = dollar_format()) +
+        labs(
+            x = "Product",
+            y = "Total revenue",
+            fill = "Sales channel",
+            title = "Total revenue by channel and division for top products"
+        )
+
+```
+
+## Revenue vs efficiency
+
+* Channel Y tends to offer a higher return on investment
+* Products 11 and 12 also have a higher dollar per offer but generate fairly low amounts of revenue
+
+```{r}
+
+sales_tidy %>%
+    mutate(product = fct_lump(factor(product), n = 7, w = total_revenue)) %>%
+    filter(division != "OTHER") %>%
+    ggplot(aes(factor(product), average_sale, color = sales_channel)) +
+        geom_boxplot() +
+        facet_wrap(~ division, ncol = 1) +
+        labs(
+            title = "Top selling product not necessarily the most profitable",
+            subtitle = "Range of dollar per offer for products by channel and division",
+            x = "Product",
+            y = "Dollar per offer",
+            color = "Sales channel"
+        )
+
+
+```
+
+# Next steps 
+
+## Recommendations 
+
+* Explore opportunities for increasing sales in Channel Y and for Products 11 and 12
+  * These tend to offer the highest return on investment even though they represent a relatively small proportion of revenue
+* Investiagte whether Product 3 and Channel Y should continue to represent the highest proportion of revenue
+* Best to explore these questions are randomized experiments
+  * Establish key metrics (dollar per offer or something else)
+  * Increase / decrease offers in one or more of the above areas and measure if revenue increases or decerases
+
+## Outstanding questions
+
+* What is the cost of each offer? Is it consistent or variable? 
+    * If variable, need to incorporate this information before making recommendations
+* Why is success rate so consistent? 
+* Conduct deeper analysis using individual level information about customers
+    * What does it cost to acquire a customer?
+    * Can we predict a customer's lifetime value?
+    * Do some products / channels / divisions have better customer retention? 
 
